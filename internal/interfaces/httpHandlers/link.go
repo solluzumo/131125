@@ -3,7 +3,6 @@ package httpHandlers
 import (
 	"encoding/json"
 	"fmt"
-	"math/rand"
 	"net/http"
 	"test/internal/app"
 	"test/internal/dto"
@@ -11,28 +10,21 @@ import (
 	"test/internal/services"
 )
 
-func generateShortID(n int) string {
-	const letters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-	b := make([]byte, n)
-	for i := range b {
-		b[i] = letters[rand.Intn(len(letters))]
-	}
-	return string(b)
-}
-
 type LinkHandler struct {
 	IsDraining     func() bool
 	UpdateDraining func()
 	App            *app.App
 	TaskService    *services.TaskService
+	LinkService    *services.LinkService
 }
 
-func NewLinkHandler(app *app.App, tService *services.TaskService) *LinkHandler {
+func NewLinkHandler(app *app.App, tService *services.TaskService, lService *services.LinkService) *LinkHandler {
 	return &LinkHandler{
 		IsDraining:     func() bool { return app.Draining.Load() },
 		UpdateDraining: func() { app.Draining.Store(true) },
 		TaskService:    tService,
 		App:            app,
+		LinkService:    lService,
 	}
 }
 
@@ -45,33 +37,20 @@ func (lh *LinkHandler) ProcessLinkHandler(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	task := &models.Task{
-		ID:   generateShortID(6),
-		Data: data.Links,
-	}
+	linkList := lh.LinkService.SaveLinkService(data)
 
-	if lh.IsDraining() {
-		taskArray := make([]*models.Task, 0)
-		taskArray = append(taskArray, task)
-
-		fmt.Fprint(w, "Сервер начал остановку, ваша задача поставлена в очередь")
-
-		if !lh.TaskService.SaveTaskService(taskArray) {
-			http.Error(w, "Не удалось сохранить вашу задачу", http.StatusInternalServerError)
-			return
-		}
-
-		fmt.Fprint(w, "\nЗадача сохранена")
+	result, err := lh.TaskService.CreateTaskForLinkService(linkList.ID, models.CheckURL)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	select {
-	case lh.App.TaskChannel <- *task:
-		fmt.Printf("Задача %s в обработке!\n", task.ID)
-	default:
-		fmt.Printf("Задача %s добавлена в буфер!\n", task.ID)
-		lh.App.TaskBuffer = append(lh.App.TaskBuffer, task)
-	}
 
+	w.Header().Set("Content-Type", "application/json")
+
+	if err := json.NewEncoder(w).Encode(result); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 }
 
 func (lh *LinkHandler) ShutDown(w http.ResponseWriter, r *http.Request) {
@@ -82,13 +61,13 @@ func (lh *LinkHandler) ShutDown(w http.ResponseWriter, r *http.Request) {
 
 	fmt.Println("Сервер начал остановку!")
 
-	lh.UpdateDraining()       // флаг "draining"
-	close(lh.App.TaskChannel) // закрыли канал, новых задач не будет
+	lh.UpdateDraining()        // флаг "draining"
+	close(*lh.App.TaskChannel) // закрыли канал, новых задач не будет
 
 	var leftover []*models.Task
 
 	// читаем всё, что осталось в канале
-	for task := range lh.App.TaskChannel {
+	for task := range *lh.App.TaskChannel {
 		fmt.Printf("Сохраняем %s\n", task.ID)
 		leftover = append(leftover, &task)
 	}
