@@ -51,7 +51,7 @@ func (lh *LinkHandler) ProcessLinkHandler(w http.ResponseWriter, r *http.Request
 	if err != nil {
 		//Если сервис в процессе отключения
 		if err.Error() == "draining" {
-			response := fmt.Sprintf("Сервер в процессе отключения, обратитесь по адресу localhost://tasks/%s", result)
+			response := fmt.Sprintf("Сервер в процессе отключения, обратитесь по адресу localhost://get-result/%s", result)
 			fmt.Fprint(w, response)
 			return
 		}
@@ -81,7 +81,7 @@ func (lh *LinkHandler) ProcessPDFHandler(w http.ResponseWriter, r *http.Request)
 	result, err := lh.TaskService.CreateTaskForLinkService(data.Links, domain.LoadPDF)
 	if err != nil {
 		if err.Error() == "draining" {
-			response := fmt.Sprintf("Сервер в процессе отключения, обратитесь по адресу localhost://tasks/%s", result)
+			response := fmt.Sprintf("Сервер в процессе отключения, обратитесь по адресу localhost://get-result/%s", result)
 			fmt.Fprint(w, response)
 			return
 		}
