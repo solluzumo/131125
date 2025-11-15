@@ -48,7 +48,7 @@ go run cmd/main.go
 ```
 POST http://localhost:8080/links
 {
-    "links":["https://habr.com"]
+    "links":["https://habr.com","https://google.com"]
 }
 ```
 
