@@ -43,17 +43,29 @@ go run cmd/main.go
 
 ## Эндпоинты для тестирования
 
+Примеры для hey
 Проверка работоспособности URL
 ```
-hey -n 15 -c 15 -m POST -H "Content-Type: application/json" -d '{"links":["https://google.com"]}' http://localhost:8080/links
+POST http://localhost:8080/links
+{
+    "links":["https://habr.com"]
+}
 ```
 
 Получение pdf
 ```
-hey -n 15 -c 15 -m POST -H "Content-Type: application/json" -d '{"links_list":["ВСТАВЬТЕ_ID"]}' http://localhost:8080/get-pdf
+POST http://localhost:8080/get-pdf
+{
+    "links_list":[
+      "id1",
+      "id2",
+      "id3"
+    ]
+}
+
 ```
 
 Получение результатов работы сервиса после перезагрзуки
 ```
-hey -n 15 -c 15 -m POST -H "Content-Type: application/json" -d '{"links_list":["ВСТАВЬТЕ_ID"]}' http://localhost:8080/get-result/task-id
+GET http://localhost:8080/get-result/task-id
 ```
