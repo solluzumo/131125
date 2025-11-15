@@ -27,8 +27,33 @@ Task имеет три типа: проверка URL, создание PDF и �
 
 Клонируем репозиторий 
 ```
-https://github.com/solluzumo/131125.git
+git clone https://github.com/solluzumo/131125.git
+cd 131125/
 ```
 
+Устанавливаем зависимости
+```
+go mod download
+```
 
+Запускаем проект
+```
+go run cmd/main.go
+```
 
+## Эндпоинты для тестирования
+
+Проверка работоспособности URL
+```
+hey -n 15 -c 15 -m POST -H "Content-Type: application/json" -d '{"links":["https://google.com"]}' http://localhost:8080/links
+```
+
+Получение pdf
+```
+hey -n 15 -c 15 -m POST -H "Content-Type: application/json" -d '{"links_list":["ВСТАВЬТЕ_ID"]}' http://localhost:8080/get-pdf
+```
+
+Получение результатов работы сервиса после перезагрзуки
+```
+hey -n 15 -c 15 -m POST -H "Content-Type: application/json" -d '{"links_list":["ВСТАВЬТЕ_ID"]}' http://localhost:8080/get-result/task-id
+```
