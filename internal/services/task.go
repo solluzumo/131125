@@ -3,54 +3,81 @@ package services
 import (
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
+	"sync"
 	"test/internal/app"
+	"test/internal/domain"
 	"test/internal/dto"
 	"test/internal/models"
 	"test/internal/pkg"
 	"test/internal/repository"
+
+	"github.com/google/uuid"
 )
 
 type TaskService struct {
 	TaskRepo *repository.TaskRepostiory
+	LinkRepo *repository.LinkRepostiory
 	App      *app.App
 }
 
-func NewTaskService(tRepo *repository.TaskRepostiory, app *app.App) *TaskService {
+func NewTaskService(tRepo *repository.TaskRepostiory, lRepo *repository.LinkRepostiory, app *app.App) *TaskService {
 	return &TaskService{
 		TaskRepo: tRepo,
+		LinkRepo: lRepo,
 		App:      app,
 	}
 }
 
-func (ts *TaskService) SaveTaskService(data []*models.Task) bool {
-	return ts.TaskRepo.SaveTask(data)
+// Функция сохранения таски
+func (ts *TaskService) SaveTaskService(data []*domain.TaskDomain) bool {
+	var tasksModels []*models.TaskModel
+	for _, el := range data {
+		obj := models.TaskModel{
+			ID:         el.ID,
+			LinksID:    el.LinksID,
+			TaskType:   string(el.TaskType),
+			TaskStatus: string(el.TaskStatus),
+		}
+
+		tasksModels = append(tasksModels, &obj)
+	}
+	return ts.TaskRepo.SaveTask(tasksModels)
 }
 
-func (ts *TaskService) CreateTaskForLinkService(linkID string, taskType models.TaskType) (dto.LinkListResponse, error) {
-	var result dto.LinkListResponse
-	resultChan := make(chan dto.LinkListResponse, 1)
-	linkIdSlice := []string{linkID}
+// Функция создания задачи и её загрузки в канал
+func (ts *TaskService) CreateTaskForLinkService(linkID []string, taskType domain.TaskType) (interface{}, error) {
 
-	task := &models.Task{
-		ID:         pkg.GenerateShortID(6),
-		LinksID:    linkIdSlice,
+	resultChan := make(chan interface{}, 1)
+	taskStatus := domain.Queued
+
+	//Если сервис в процессе завершения работы
+	if ts.App.Draining.Load() {
+		taskStatus = domain.FromMemory
+	}
+
+	task := &domain.TaskDomain{
+		ID:         uuid.New().String(),
+		LinksID:    linkID,
 		TaskType:   taskType,
-		TaskStatus: models.Queued,
+		TaskStatus: taskStatus,
 		ResultChan: resultChan,
 	}
 
-	if ts.App.Draining.Load() {
-		taskArray := make([]*models.Task, 0)
-		taskArray = append(taskArray, task)
+	taskArray := []*domain.TaskDomain{task}
 
-		if !ts.SaveTaskService(taskArray) {
-			return result, errors.New("не удалось сохранить вашу задачу")
-		}
-
-		fmt.Println("Задача сохранена")
-		return result, nil
+	if !ts.SaveTaskService(taskArray) {
+		return nil, errors.New("не удалось сохранить вашу задачу")
 	}
+
+	//Если сервис в процессе завершения работы
+	if taskStatus == domain.FromMemory {
+		return task.ID, errors.New("draining")
+	}
+
+	//Если сервис НЕ в процессе завершения работы
+
 	//Загружаем таску в канал
 	select {
 	case *ts.App.TaskChannel <- *task:
@@ -60,66 +87,142 @@ func (ts *TaskService) CreateTaskForLinkService(linkID string, taskType models.T
 		ts.App.TaskBuffer = append(ts.App.TaskBuffer, task)
 	}
 
-	result = <-resultChan
+	//Ожидаем результат и возвращаем
+	result := <-resultChan
 
 	close(resultChan)
 
 	return result, nil
 }
 
-func Worker(id int, tasksChan <-chan models.Task, app *app.App) {
-	defer app.WG.Done()
+// Функция обновления статуса задачи
+func (ts *TaskService) UpdateTaskStatus(task *domain.TaskDomain) error {
+	return ts.TaskRepo.UpdateTask(task)
+}
+
+// Функция обёртка для проверки URL
+func (ts *TaskService) CheckURL(task *domain.TaskDomain) (*dto.LinkListResponse, error) {
+
+	var result dto.LinkListResponse
+
+	result.Links = make(map[string]string)
+
+	if err := ts.ProcessURLCheck(&result, task); err != nil {
+		return nil, err
+	}
+
+	if err := ts.LinkRepo.UpdateLink(&result); err != nil {
+		return nil, err
+	}
+
+	return &result, nil
+}
+
+// Функция обёртка для генерации PDF файла
+func (ts *TaskService) GeneratePDF(task *domain.TaskDomain) (string, error) {
+	fileName := pkg.PDFNameFromIDs(task.LinksID)
+	//Путь до pdf
+	pdfPath := filepath.Join(ts.App.Config.PdfDir, fileName)
+
+	if _, err := os.Stat(pdfPath); err != nil {
+		if err := ts.ProcessPDF(task, fileName); err != nil {
+			return "", err
+		}
+	}
+
+	return pdfPath, nil
+}
+
+// Функция обработки задачи по основным типам
+func (ts *TaskService) ProcessTask(task domain.TaskDomain) error {
+
+	switch task.TaskType {
+	//Если задача на проверку адресов
+	case domain.CheckURL:
+		result, err := ts.CheckURL(&task)
+		if err != nil {
+			return err
+		}
+		task.ResultChan <- result
+	//Если задача на загрузку ПДФ
+	case domain.LoadPDF:
+		path, err := ts.GeneratePDF(&task)
+		if err != nil {
+			return err
+		}
+		task.ResultChan <- path
+	//Если задача на возврат ответа(для случаев, когда пользователь отправил запрос во время отключения сервиса)
+	case domain.GiveResult:
+		//
+	}
+
+	//Если задача создалась во время отключения, то закрываем канал вручную
+	if task.TaskStatus == domain.FromMemory {
+		close(task.ResultChan)
+	}
+
+	return ts.UpdateTaskStatus(&task)
+
+}
+
+// Функция Воркера
+func Worker(id int, tasksChan <-chan domain.TaskDomain, taskService *TaskService, wg *sync.WaitGroup) {
+	defer wg.Done()
+
 	for task := range tasksChan {
-		var result dto.LinkListResponse
-		//Меняем статус задачи
-		task.TaskStatus = models.Processing
-
-		result.Links = make(map[string]string)
-		path := filepath.Join(app.Config.DataDir, "links.json")
-		//Обрабатываем
-		if task.TaskType == models.CheckURL {
-			if processURLCheck(&result, &task, path) {
-				repository.UpdateLink(&result)
-				//Сохранить и просто отправить в канал строку типо готово
-				//плюсы: можно будет использовать для метода с pdf - отправляя ссылку на файл в тот же канал
-				//минусы:надо подумать
-
-				//отправлять доступность ссылок и пдф файл по разным каналам
-				//плюсы: надо подумать
-				//минусы: реализация сложнее, дополнительный канал - затраты
-
-				//TODO:
-				//доделать метод обновления ссылки в базе
-				//сделать метод проверки URL
-				//сделать метод получения нескольких link по id
-				//сделать метод формирования pdf
-				//сделать хэндлер для обработки запроса на pdf
-				//сделать метод получения тасок из базы(после отключения)
-
-			}
-
+		task.TaskStatus = domain.Processing
+		fmt.Printf("Worker %d WORKING on task %s\n", id, task.ID)
+		if err := taskService.ProcessTask(task); err != nil {
+			fmt.Printf("Worker %d: ERROR %v\n", id, err)
 		}
-
-		if (len(app.TaskBuffer) != 0) && (!app.Draining.Load()) {
-			app.FlushBuffer()
-		}
+		fmt.Printf("Worker %d has finished task %s\n", id, task.ID)
 
 	}
 	fmt.Printf("Worker %d stopped\n", id)
 }
 
-func processURLCheck(result *dto.LinkListResponse, task *models.Task, path string) bool {
-	linkID := task.LinksID[0]
-	data, err := repository.GetLinksByID(path, linkID)
-	if err != nil {
-		fmt.Printf("ERRROR:%v\n", err)
-		return false
+// Функция создания PDF с ссылками
+func (ts *TaskService) ProcessPDF(task *domain.TaskDomain, fileName string) error {
+
+	var links []string
+	var subArray []string
+	//получаем общий slice ["link1-valu1","link2-value2",...] для всех наборов ссылок
+	for _, i := range task.LinksID {
+		links_i, err := ts.LinkRepo.GetLinksByID(i)
+		if err != nil {
+			return err
+		}
+		for k, v := range links_i {
+			subArray = append(subArray, fmt.Sprintf("%s-%s", k, v))
+		}
+
+		links = append(links, subArray...)
+
+		subArray = subArray[:0]
+
 	}
-	for key := range data {
-		result.Links[key] = "available"
+
+	//сохраняем в pdf и получаем путь до файла
+	err := ts.LinkRepo.SavePDF(links, fileName)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// Функция проверки доступности ссылок
+func (ts *TaskService) ProcessURLCheck(result *dto.LinkListResponse, task *domain.TaskDomain) error {
+	linkID := task.LinksID[0]
+	data, err := ts.LinkRepo.GetLinksByID(linkID)
+	if err != nil {
+		return err
+	}
+	for URL := range data {
+		result.Links[URL] = pkg.SendRequest(URL)
 	}
 	result.LinksID = linkID
-	task.TaskStatus = models.Done
-	task.ResultChan <- *result
-	return true
+	task.TaskStatus = domain.Done
+
+	return nil
 }

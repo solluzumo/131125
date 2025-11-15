@@ -4,19 +4,20 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
-	"test/internal/models"
+	"test/internal/domain"
+	"time"
 )
 
 type App struct {
 	Draining    atomic.Bool
 	WG          *sync.WaitGroup
 	Config      *Config
-	TaskBuffer  []*models.Task
-	TaskChannel *chan models.Task
+	TaskBuffer  []*domain.TaskDomain
+	TaskChannel *chan domain.TaskDomain
 	Mutex       *sync.Mutex
 }
 
-func NewApp(wg *sync.WaitGroup, config *Config, taskBuffer []*models.Task, taskChannel *chan models.Task, mu *sync.Mutex) *App {
+func NewApp(wg *sync.WaitGroup, config *Config, taskBuffer []*domain.TaskDomain, taskChannel *chan domain.TaskDomain, mu *sync.Mutex) *App {
 	return &App{
 		Draining:    atomic.Bool{},
 		WG:          wg,
@@ -36,7 +37,7 @@ func (a *App) FlushBuffer() {
 		select {
 		case *a.TaskChannel <- *a.TaskBuffer[0]:
 			fmt.Printf("Слили задачу %s\n", a.TaskBuffer[0].ID)
-			a.TaskBuffer = a.TaskBuffer[1:] // удаляем первую задачу
+			a.TaskBuffer = a.TaskBuffer[1:]
 			count++
 		default:
 			fmt.Println("В буфере сейчас:")
@@ -47,4 +48,15 @@ func (a *App) FlushBuffer() {
 		}
 	}
 
+}
+
+func (a *App) StartFlushBufferTicker(interval time.Duration) {
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+
+		for range ticker.C {
+			a.FlushBuffer()
+		}
+	}()
 }

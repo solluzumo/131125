@@ -1,8 +1,6 @@
 package services
 
 import (
-	"fmt"
-	"test/internal/app"
 	"test/internal/dto"
 	"test/internal/models"
 	"test/internal/repository"
@@ -12,17 +10,15 @@ import (
 
 type LinkService struct {
 	LinkRepo *repository.LinkRepostiory
-	App      *app.App
 }
 
-func NewLinkService(lRepo *repository.LinkRepostiory, app *app.App) *LinkService {
+func NewLinkService(lRepo *repository.LinkRepostiory) *LinkService {
 	return &LinkService{
 		LinkRepo: lRepo,
-		App:      app,
 	}
 }
 
-// Создаём линки и сохраняем их в памяти
+// Функция создания и сохранения линки
 func (ls *LinkService) SaveLinkService(data dto.LinkListRequest) *models.LinkList {
 	var links []*models.Link
 	linkList := &models.LinkList{
@@ -34,7 +30,6 @@ func (ls *LinkService) SaveLinkService(data dto.LinkListRequest) *models.LinkLis
 			URL:    el,
 			Status: "not avaliable",
 		}
-		fmt.Println(link_obj)
 		links = append(links, link_obj)
 	}
 

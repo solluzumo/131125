@@ -1,13 +1,17 @@
 package app
 
 type Config struct {
-	DataDir    string
-	WorkersNum int
+	JsonDir     string
+	PdfDir      string
+	WorkersNum  int
+	TaskChanCap int
 }
 
 func NewConfig() *Config {
 	return &Config{
-		DataDir:    "./data",
-		WorkersNum: 2,
+		JsonDir:     "./data",
+		PdfDir:      "./data/pdf",
+		WorkersNum:  2,
+		TaskChanCap: 5,
 	}
 }

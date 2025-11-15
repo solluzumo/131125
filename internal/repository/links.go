@@ -1,27 +1,81 @@
 package repository
 
 import (
+	"encoding/json"
 	"fmt"
+	"io/ioutil"
+	"os"
 	"path/filepath"
+	"sync"
 	"test/internal/app"
+	"test/internal/dto"
 	"test/internal/models"
+
+	"github.com/jung-kurt/gofpdf"
 )
 
 type LinkRepostiory struct {
-	App *app.App
+	mu       *sync.Mutex
+	app      *app.App
+	linkPath string
+	pdfPath  string
 }
 
-func NewLinkRepostiory(app *app.App) *LinkRepostiory {
+func NewLinkRepostiory(app *app.App, mu *sync.Mutex, lPath string, pPath string) *LinkRepostiory {
 	return &LinkRepostiory{
-		App: app,
+		app:      app,
+		mu:       mu,
+		linkPath: lPath,
+		pdfPath:  pPath,
 	}
 }
 
-func (lr *LinkRepostiory) SaveLinks(data *models.LinkList) bool {
-	var data_formed models.LinkJson
-	path := filepath.Join(lr.App.Config.DataDir, "links.json")
+// Функция обновления линков
+func (lr *LinkRepostiory) UpdateLink(data *dto.LinkListResponse) error {
+	lr.mu.Lock()
+	defer lr.mu.Unlock()
 
-	existingData, err := ReadJson[models.LinkJson](path)
+	fmt.Println("Обновляем линк")
+	allObjects, err := lr.ReadLinkJson()
+	if err != nil {
+		return err
+	}
+	for id := range allObjects {
+		if allObjects[id].ID == data.LinksID {
+			allObjects[id].LinksData = data.Links
+		}
+	}
+	if err := lr.WriteLinkJSON(&allObjects); err != nil {
+		return err
+	}
+	return nil
+}
+
+// Функция получения линков по id набора
+// Возвращает маппу {"link1":"available","link2":"not available"}
+func (lr *LinkRepostiory) GetLinksByID(id string) (map[string]string, error) {
+	lr.mu.Lock()
+	defer lr.mu.Unlock()
+
+	data, err := lr.ReadLinkJson()
+	if err != nil {
+		return nil, err
+	}
+	for _, el := range data {
+		if el.ID == id {
+			return el.LinksData, nil
+		}
+	}
+	return nil, nil
+}
+
+// Функция сохранения линков
+func (lr *LinkRepostiory) SaveLinks(data *models.LinkList) bool {
+	lr.mu.Lock()
+	defer lr.mu.Unlock()
+	var data_formed models.LinkJson
+
+	existingData, err := lr.ReadLinkJson()
 	if err != nil {
 		fmt.Printf("Ошибка при чтении файла:%v\n", err)
 		return false
@@ -31,18 +85,86 @@ func (lr *LinkRepostiory) SaveLinks(data *models.LinkList) bool {
 	data_formed.ID = data.ID
 	data_formed.LinksData = make(map[string]string)
 	for _, el := range data.LinksData {
-		fmt.Println("fasdf    ", el)
 		obj := *el
 		data_formed.LinksData[obj.URL] = obj.Status
 	}
 
 	existingData = append(existingData, data_formed)
 
-	err = WriteJSON(path, existingData)
+	err = lr.WriteLinkJSON(&existingData)
 	if err != nil {
 		fmt.Printf("Ошибка при записи файла:%v\n", err)
 		return false
 	}
 
 	return true
+}
+
+// Функция чтения линков
+func (lr *LinkRepostiory) ReadLinkJson() ([]models.LinkJson, error) {
+
+	filePath := filepath.Join(lr.linkPath, "links.json")
+
+	file, err := os.Open(filePath)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	byteValue, err := ioutil.ReadAll(file)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(byteValue) == 0 {
+		return []models.LinkJson{}, nil
+	}
+
+	var data []models.LinkJson
+	if err := json.Unmarshal(byteValue, &data); err != nil {
+		return nil, err
+	}
+
+	return data, nil
+}
+
+// Функция сохранения линков
+func (lr *LinkRepostiory) WriteLinkJSON(data *[]models.LinkJson) error {
+
+	filePath := filepath.Join(lr.linkPath, "links.json")
+
+	file, err := os.Create(filePath)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	jsonData, err := json.MarshalIndent(data, "", "    ")
+	if err != nil {
+		return err
+	}
+
+	_, err = file.Write(jsonData)
+	return err
+}
+
+// Функция сохранения PDF
+func (lr *LinkRepostiory) SavePDF(links []string, fileName string) error {
+
+	filePath := filepath.Join(lr.pdfPath, fileName)
+
+	pdf := gofpdf.New("P", "mm", "A4", "")
+	pdf.AddPage()
+	pdf.SetFont("Arial", "", 16)
+
+	for _, line := range links {
+		pdf.Cell(0, 10, line)
+		pdf.Ln(12) // перенос строки
+	}
+
+	err := pdf.OutputFileAndClose(filePath)
+	if err != nil {
+		return err
+	}
+	return nil
 }
