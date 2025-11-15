@@ -43,7 +43,6 @@ go run cmd/main.go
 
 ## Эндпоинты для тестирования
 
-Примеры для hey
 Проверка работоспособности URL
 ```
 POST http://localhost:8080/links
