@@ -148,5 +148,11 @@
         "links": {
             "https://google.com": "available"
         }
+    },
+    {
+        "link_num": "455af34c-61c1-482b-81c7-317760122a50",
+        "links": {
+            "https://yandex.ru": "available"
+        }
     }
 ]
