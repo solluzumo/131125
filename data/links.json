@@ -148,5 +148,23 @@
         "links": {
             "https://google.com": "available"
         }
+    },
+    {
+        "link_num": "9c921ebf-103f-4cbb-8968-a025299c6ebc",
+        "links": {
+            "https://google.com": "available"
+        }
+    },
+    {
+        "link_num": "89515521-e831-4651-9552-ebe19120c15b",
+        "links": {
+            "https://habr.com": "available"
+        }
+    },
+    {
+        "link_num": "467de8f7-8a4a-4e2f-bff7-7d6145d34461",
+        "links": {
+            "https://yandex.ru": "not available"
+        }
     }
 ]
