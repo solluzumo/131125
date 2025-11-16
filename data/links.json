@@ -154,5 +154,11 @@
         "links": {
             "https://yandex.ru": "available"
         }
+    },
+    {
+        "link_num": "d42288a2-b726-453e-9b73-de64e24d0f25",
+        "links": {
+            "https://yandex.ru": "available"
+        }
     }
 ]

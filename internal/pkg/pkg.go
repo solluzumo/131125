@@ -20,8 +20,8 @@ func PDFNameFromIDs(ids []string) string {
 	return fmt.Sprintf("%x.pdf", hash[:8])
 }
 
-func isStatuOk(status string) bool {
-	return strings.Contains(status, "2") || strings.Contains(status, "OK")
+func isStatuOk(status int) bool {
+	return status >= 200 && status < 300
 }
 
 // Функция отправки запроса для проверки доступности конкретного URL
@@ -32,7 +32,7 @@ func SendRequest(URL string) string {
 	}
 	resp, err := client.Head(URL)
 
-	if (err != nil) || (!isStatuOk(resp.Status)) {
+	if (err != nil) || (!isStatuOk(resp.StatusCode)) {
 
 		fmt.Printf("SEND REQUEST ERROR:%v; STATUS:%s\n", err, resp.Status)
 
