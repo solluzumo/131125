@@ -2,12 +2,14 @@ package models
 
 type LinkList struct {
 	ID        string
-	LinksData []*Link
+	LinksData map[string]string
 }
 
-type Link struct {
-	URL    string
-	Status string
+func NewLinkList(id string, data map[string]string) *LinkList {
+	return &LinkList{
+		ID:        id,
+		LinksData: data,
+	}
 }
 
 type LinkJson struct {

@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"sync"
 	"test/internal/app"
-	"test/internal/domain"
 	"test/internal/models"
 )
 
@@ -51,26 +50,6 @@ func (tr *TaskRepostiory) SaveTask(data []*models.TaskModel) bool {
 		return false
 	}
 	return true
-}
-
-// Функция обновления задачи
-func (tr *TaskRepostiory) UpdateTask(task *domain.TaskDomain) error {
-	tr.mu.Lock()
-	defer tr.mu.Unlock()
-	allObjects, err := tr.ReadTaskJson()
-	if err != nil {
-		return err
-	}
-	for id := range allObjects {
-		if allObjects[id].ID == task.ID {
-			allObjects[id].TaskStatus = string(domain.Done)
-
-		}
-	}
-	if err := tr.WriteTaskJSON(&allObjects); err != nil {
-		return err
-	}
-	return nil
 }
 
 // Функция чтения задач

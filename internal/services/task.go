@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -9,11 +10,8 @@ import (
 	"test/internal/app"
 	"test/internal/domain"
 	"test/internal/dto"
-	"test/internal/models"
 	"test/internal/pkg"
 	"test/internal/repository"
-
-	"github.com/google/uuid"
 )
 
 type TaskService struct {
@@ -30,50 +28,12 @@ func NewTaskService(tRepo *repository.TaskRepostiory, lRepo *repository.LinkRepo
 	}
 }
 
-// Функция сохранения таски
-func (ts *TaskService) SaveTaskService(data []*domain.TaskDomain) bool {
-	var tasksModels []*models.TaskModel
-	for _, el := range data {
-		obj := models.TaskModel{
-			ID:         el.ID,
-			LinksID:    el.LinksID,
-			TaskType:   string(el.TaskType),
-			TaskStatus: string(el.TaskStatus),
-		}
-
-		tasksModels = append(tasksModels, &obj)
-	}
-	return ts.TaskRepo.SaveTask(tasksModels)
-}
-
 // Функция создания задачи и её загрузки в канал
-func (ts *TaskService) CreateTaskForLinkService(linkID []string, taskType domain.TaskType) (interface{}, error) {
-
-	resultChan := make(chan interface{}, 1)
-	taskStatus := domain.Queued
+func (ts *TaskService) CreateTaskForLinkService(ctx context.Context, task *domain.TaskDomain) (interface{}, error) {
 
 	//Если сервис в процессе завершения работы
 	if ts.App.Draining.Load() {
-		taskStatus = domain.FromMemory
-	}
-
-	task := &domain.TaskDomain{
-		ID:         uuid.New().String(),
-		LinksID:    linkID,
-		TaskType:   taskType,
-		TaskStatus: taskStatus,
-		ResultChan: resultChan,
-	}
-
-	taskArray := []*domain.TaskDomain{task}
-
-	if !ts.SaveTaskService(taskArray) {
-		return nil, errors.New("не удалось сохранить вашу задачу")
-	}
-
-	//Если сервис в процессе завершения работы
-	if taskStatus == domain.FromMemory {
-		return task.ID, errors.New("draining")
+		return nil, errors.New("draining")
 	}
 
 	//Если сервис НЕ в процессе завершения работы
@@ -82,22 +42,19 @@ func (ts *TaskService) CreateTaskForLinkService(linkID []string, taskType domain
 	select {
 	case *ts.App.TaskChannel <- *task:
 		fmt.Printf("Задача %s в обработке!\n", task.ID)
+	case <-ctx.Done():
+		return nil, errors.New("request canceled by client")
 	default:
-		fmt.Printf("Задача %s добавлена в буфер!\n", task.ID)
-		ts.App.TaskBuffer = append(ts.App.TaskBuffer, task)
+		return nil, errors.New("channel is full")
 	}
 
 	//Ожидаем результат и возвращаем
-	result := <-resultChan
+	result := <-task.ResultChan
 
-	close(resultChan)
+	//Закрываем канал для реузльтатов
+	close(task.ResultChan)
 
 	return result, nil
-}
-
-// Функция обновления статуса задачи
-func (ts *TaskService) UpdateTaskStatus(task *domain.TaskDomain) error {
-	return ts.TaskRepo.UpdateTask(task)
 }
 
 // Функция обёртка для проверки URL
@@ -111,19 +68,18 @@ func (ts *TaskService) CheckURL(task *domain.TaskDomain) (*dto.LinkListResponse,
 		return nil, err
 	}
 
-	if err := ts.LinkRepo.UpdateLink(&result); err != nil {
-		return nil, err
-	}
-
 	return &result, nil
 }
 
 // Функция обёртка для генерации PDF файла
 func (ts *TaskService) GeneratePDF(task *domain.TaskDomain) (string, error) {
-	fileName := pkg.PDFNameFromIDs(task.LinksID)
+
+	fileName := pkg.PDFNameFromIDs(task.LinkID)
+
 	//Путь до pdf
 	pdfPath := filepath.Join(ts.App.Config.PdfDir, fileName)
 
+	//Если файл не существует, начинаем процесс создания, иначе просто возвращаем путь
 	if _, err := os.Stat(pdfPath); err != nil {
 		if err := ts.ProcessPDF(task, fileName); err != nil {
 			return "", err
@@ -137,6 +93,7 @@ func (ts *TaskService) GeneratePDF(task *domain.TaskDomain) (string, error) {
 func (ts *TaskService) ProcessTask(task domain.TaskDomain) error {
 
 	switch task.TaskType {
+
 	//Если задача на проверку адресов
 	case domain.CheckURL:
 		result, err := ts.CheckURL(&task)
@@ -144,6 +101,7 @@ func (ts *TaskService) ProcessTask(task domain.TaskDomain) error {
 			return err
 		}
 		task.ResultChan <- result
+
 	//Если задача на загрузку ПДФ
 	case domain.LoadPDF:
 		path, err := ts.GeneratePDF(&task)
@@ -151,18 +109,9 @@ func (ts *TaskService) ProcessTask(task domain.TaskDomain) error {
 			return err
 		}
 		task.ResultChan <- path
-	//Если задача на возврат ответа(для случаев, когда пользователь отправил запрос во время отключения сервиса)
-	case domain.GiveResult:
-		//
 	}
 
-	//Если задача создалась во время отключения, то закрываем канал вручную
-	if task.TaskStatus == domain.FromMemory {
-		close(task.ResultChan)
-	}
-
-	return ts.UpdateTaskStatus(&task)
-
+	return nil
 }
 
 // Функция Воркера
@@ -170,7 +119,6 @@ func Worker(id int, tasksChan <-chan domain.TaskDomain, taskService *TaskService
 	defer wg.Done()
 
 	for task := range tasksChan {
-		task.TaskStatus = domain.Processing
 		fmt.Printf("Worker %d WORKING on task %s\n", id, task.ID)
 		if err := taskService.ProcessTask(task); err != nil {
 			fmt.Printf("Worker %d: ERROR %v\n", id, err)
@@ -185,24 +133,20 @@ func Worker(id int, tasksChan <-chan domain.TaskDomain, taskService *TaskService
 func (ts *TaskService) ProcessPDF(task *domain.TaskDomain, fileName string) error {
 
 	var links []string
-	var subArray []string
-	//получаем общий slice ["link1-valu1","link2-value2",...] для всех наборов ссылок
-	for _, i := range task.LinksID {
-		links_i, err := ts.LinkRepo.GetLinksByID(i)
+	//получаем ["link1-valu1","link2-value2",...] для всех наборов ссылок по их linkID
+	for _, linkID := range task.LinkID {
+
+		linkData, err := ts.LinkRepo.GetLinksByID(linkID)
 		if err != nil {
 			return err
 		}
-		for k, v := range links_i {
-			subArray = append(subArray, fmt.Sprintf("%s-%s", k, v))
+
+		for url, status := range linkData {
+			links = append(links, fmt.Sprintf("%s-%s", url, status))
 		}
-
-		links = append(links, subArray...)
-
-		subArray = subArray[:0]
-
 	}
 
-	//сохраняем в pdf и получаем путь до файла
+	//сохраняем в pdf
 	err := ts.LinkRepo.SavePDF(links, fileName)
 	if err != nil {
 		return err
@@ -213,16 +157,16 @@ func (ts *TaskService) ProcessPDF(task *domain.TaskDomain, fileName string) erro
 
 // Функция проверки доступности ссылок
 func (ts *TaskService) ProcessURLCheck(result *dto.LinkListResponse, task *domain.TaskDomain) error {
-	linkID := task.LinksID[0]
-	data, err := ts.LinkRepo.GetLinksByID(linkID)
-	if err != nil {
-		return err
-	}
+	linkID := task.LinkID[0]
+
+	data := task.LinksSets
+
 	for URL := range data {
 		result.Links[URL] = pkg.SendRequest(URL)
 	}
 	result.LinksID = linkID
-	task.TaskStatus = domain.Done
+
+	ts.LinkRepo.SaveLinks(result.Links, result.LinksID)
 
 	return nil
 }

@@ -1,9 +1,12 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"os/signal"
 	"sync"
 	"test/internal/app"
 	"test/internal/domain"
@@ -40,48 +43,39 @@ func main() {
 		go services.Worker(i, *app.TaskChannel, taskService, app.WG)
 	}
 
-	//Подгружаем сохраненные раннее задачи
-	LoadTasks(app, taskRepo)
-
 	mux.HandleFunc("POST /links", handler.ProcessLinkHandler)
 	mux.HandleFunc("POST /get-pdf", handler.ProcessPDFHandler)
 	mux.HandleFunc("GET /shutdown", handler.ShutDown)
 
-	fmt.Println("Server starting on port 8080...")
-
-	app.StartFlushBufferTicker(2 * time.Second)
-
-	log.Fatal(http.ListenAndServe(":8080", mux))
-
-}
-
-func LoadTasks(a *app.App, taskRepo *repository.TaskRepostiory) {
-
-	data, err := taskRepo.ReadTaskJson()
-	if err != nil {
-		fmt.Printf("Ошибка при чтении файла:%v\n", err)
+	server := &http.Server{
+		Addr:    ":8080",
+		Handler: mux,
 	}
 
-	for _, el := range data {
-		if el.TaskStatus == string(domain.Done) {
-			continue
-		}
-		resultChan := make(chan interface{}, 1)
-		taskObj := domain.TaskDomain{
-			ID:         el.ID,
-			LinksID:    el.LinksID,
-			TaskType:   domain.TaskType(el.TaskType),
-			TaskStatus: domain.TaskStatus(el.TaskStatus),
-			ResultChan: resultChan,
-		}
-		select {
-		case *a.TaskChannel <- taskObj:
-			fmt.Printf("Задача %s была загружена из памяти в очередь\n", el.ID)
-		default:
-			a.TaskBuffer = append(a.TaskBuffer, &taskObj)
-			fmt.Printf("Задача %s была загружена из памяти в буфер\n", el.ID)
-		}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
 
+	go func() {
+		fmt.Println("Server starting on :8080")
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("Server error: %v", err)
+		}
+	}()
+
+	// Ждём Ctrl+C
+	<-ctx.Done()
+	fmt.Println("\nShutting down...")
+
+	// Завершаем HTTP-сервер
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+	defer cancel()
+	if err := server.Shutdown(shutdownCtx); err != nil {
+		log.Fatalf("Server Shutdown Failed:%+v", err)
 	}
+
+	close(tasksChan)
+	wg.Wait()
+
+	fmt.Println("Server exited properly")
 
 }

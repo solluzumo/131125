@@ -1,13 +1,6 @@
 package domain
 
-type TaskStatus string
-
-const (
-	Queued     TaskStatus = "Queued"
-	Processing TaskStatus = "TaskStatus"
-	Done       TaskStatus = "Done"
-	FromMemory TaskStatus = "FromMemory"
-)
+import "context"
 
 type TaskType string
 
@@ -18,9 +11,10 @@ const (
 )
 
 type TaskDomain struct {
-	ID         string   `json:"id"`
-	LinksID    []string `json:"links_id"`
+	ID         string
+	LinkID     []string          //["setID1","setID2"]
+	LinksSets  map[string]string //{"link1":"valu1","link2":"value2"...}
+	Ctx        context.Context
 	TaskType   TaskType
-	TaskStatus TaskStatus
 	ResultChan chan interface{}
 }

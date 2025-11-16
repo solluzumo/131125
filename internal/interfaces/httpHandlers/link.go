@@ -10,7 +10,8 @@ import (
 	"test/internal/domain"
 	"test/internal/dto"
 	"test/internal/services"
-	"time"
+
+	"github.com/google/uuid"
 )
 
 type LinkHandler struct {
@@ -33,6 +34,7 @@ func NewLinkHandler(app *app.App, tService *services.TaskService, lService *serv
 
 // Функция обработки запроса на проверку линков
 func (lh *LinkHandler) ProcessLinkHandler(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 
 	var data dto.LinkListRequest
 
@@ -41,13 +43,29 @@ func (lh *LinkHandler) ProcessLinkHandler(w http.ResponseWriter, r *http.Request
 		fmt.Println("неверный формат", r.Body)
 		return
 	}
-	//Сохраняем линки
-	linkList := lh.LinkService.SaveLinkService(data)
 
-	linkIdSlice := []string{linkList.ID}
+	//Парсим данные в нужную структуру
+	linkID := uuid.New().String()
+
+	linkMap := make(map[string]string)
+
+	for _, el := range data.Links {
+		linkMap[el] = "not available"
+	}
+
+	resultChan := make(chan interface{}, 1)
+
+	task := &domain.TaskDomain{
+		ID:         uuid.New().String(), //ID задачи
+		LinkID:     []string{linkID},    //ID набора линков
+		LinksSets:  linkMap,             //Мапа с URL:STATUS //{"google.com":"not available"}
+		TaskType:   domain.CheckURL,     //Тип таски: проверка URL или получение PDF
+		Ctx:        ctx,                 //Контекст
+		ResultChan: resultChan,          //Канал для результата
+	}
 
 	//Создаем и запускаем в канал таску, ожидаем ответ
-	result, err := lh.TaskService.CreateTaskForLinkService(linkIdSlice, domain.CheckURL)
+	result, err := lh.TaskService.CreateTaskForLinkService(ctx, task)
 	if err != nil {
 		//Если сервис в процессе отключения
 		if err.Error() == "draining" {
@@ -69,6 +87,7 @@ func (lh *LinkHandler) ProcessLinkHandler(w http.ResponseWriter, r *http.Request
 
 // Функция обработки запроса на создания PDF из наборов линков
 func (lh *LinkHandler) ProcessPDFHandler(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 
 	var data dto.PdfRequest
 
@@ -77,18 +96,30 @@ func (lh *LinkHandler) ProcessPDFHandler(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	//Инициализируем канал и задачу
+	resultChan := make(chan interface{}, 1)
+
+	task := &domain.TaskDomain{
+		ID:         uuid.New().String(),
+		LinkID:     data.LinksIDS,
+		LinksSets:  nil,
+		TaskType:   domain.LoadPDF,
+		Ctx:        ctx,
+		ResultChan: resultChan,
+	}
+
 	//Создаем и запускаем в канал таску, ожидаем ответ
-	result, err := lh.TaskService.CreateTaskForLinkService(data.Links, domain.LoadPDF)
+	result, err := lh.TaskService.CreateTaskForLinkService(ctx, task)
 	if err != nil {
-		if err.Error() == "draining" {
-			response := fmt.Sprintf("Сервер в процессе отключения, обратитесь по адресу localhost://get-result/%s", result)
-			fmt.Fprint(w, response)
-			return
-		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
+	if result == "" {
+		http.Error(w, "не удалось создать файл", http.StatusInternalServerError)
+		return
+	}
+	//Формируем заголовки и читаем PDF для передачи
 	w.Header().Set("Content-Type", "application/json")
 	file, err := os.Open(result.(string))
 	if err != nil {
@@ -117,33 +148,14 @@ func (lh *LinkHandler) ShutDown(w http.ResponseWriter, r *http.Request) {
 	//Меняем статус сервера на отключение
 	lh.UpdateDraining()
 
-	//Пауза для отладки, можно убрать
-	time.Sleep(10 * time.Second)
+	//Пауза для отладки
+	//time.Sleep(10 * time.Second)
 
 	//Закрываем канал с тасками
 	close(*lh.App.TaskChannel)
 
-	var leftover []*domain.TaskDomain
-
-	// читаем всё, что осталось в канале
-	for task := range *lh.App.TaskChannel {
-		fmt.Printf("Сохраняем %s\n", task.ID)
-		task.TaskStatus = domain.FromMemory
-		leftover = append(leftover, &task)
-	}
-
-	//Сохраняем таски из буфера
-	for _, task := range lh.App.TaskBuffer {
-		fmt.Printf("Сохраняем %s\n", task.ID)
-		task.TaskStatus = domain.FromMemory
-		leftover = append(leftover, task)
-	}
-
 	// ждём завершения воркеров
 	lh.App.WG.Wait()
-
-	// сохраняем невыполненные задачи
-	lh.TaskService.SaveTaskService(leftover)
 
 	fmt.Fprint(w, "Сервер завершил работу")
 }

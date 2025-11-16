@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"sync"
 	"test/internal/app"
-	"test/internal/dto"
 	"test/internal/models"
 
 	"github.com/jung-kurt/gofpdf"
@@ -30,27 +29,6 @@ func NewLinkRepostiory(app *app.App, mu *sync.Mutex, lPath string, pPath string)
 	}
 }
 
-// Функция обновления линков
-func (lr *LinkRepostiory) UpdateLink(data *dto.LinkListResponse) error {
-	lr.mu.Lock()
-	defer lr.mu.Unlock()
-
-	fmt.Println("Обновляем линк")
-	allObjects, err := lr.ReadLinkJson()
-	if err != nil {
-		return err
-	}
-	for id := range allObjects {
-		if allObjects[id].ID == data.LinksID {
-			allObjects[id].LinksData = data.Links
-		}
-	}
-	if err := lr.WriteLinkJSON(&allObjects); err != nil {
-		return err
-	}
-	return nil
-}
-
 // Функция получения линков по id набора
 // Возвращает маппу {"link1":"available","link2":"not available"}
 func (lr *LinkRepostiory) GetLinksByID(id string) (map[string]string, error) {
@@ -70,7 +48,7 @@ func (lr *LinkRepostiory) GetLinksByID(id string) (map[string]string, error) {
 }
 
 // Функция сохранения линков
-func (lr *LinkRepostiory) SaveLinks(data *models.LinkList) bool {
+func (lr *LinkRepostiory) SaveLinks(data map[string]string, idSet string) bool {
 	lr.mu.Lock()
 	defer lr.mu.Unlock()
 	var data_formed models.LinkJson
@@ -82,12 +60,9 @@ func (lr *LinkRepostiory) SaveLinks(data *models.LinkList) bool {
 	}
 
 	//Сериализуем данные под Json
-	data_formed.ID = data.ID
-	data_formed.LinksData = make(map[string]string)
-	for _, el := range data.LinksData {
-		obj := *el
-		data_formed.LinksData[obj.URL] = obj.Status
-	}
+	data_formed.ID = idSet
+
+	data_formed.LinksData = data
 
 	existingData = append(existingData, data_formed)
 
